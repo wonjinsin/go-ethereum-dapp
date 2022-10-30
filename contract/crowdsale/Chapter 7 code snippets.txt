@@ -1,0 +1,375 @@
+Section 7.1.1 
+
+* Removing duplication with template method
+
+contract SimpleCrowdsale is Ownable {
+    ...    
+	
+    function isValidInvestment(uint256 _investment) 
+        internal view returns (bool) {
+        bool nonZeroInvestment = _investment != 0;
+        bool withinCrowdsalePeriod = now >= startTime && now <= endTime; 
+    		
+        return nonZeroInvestment && withinCrowdsalePeriod 
+           && isFullInvestmentWithinLimit(_investment);//#B
+    }
+    
+    function isFullInvestmentWithinLimit(uint256 _investment) 
+        internal view returns (bool) {
+        return true;//#C
+    }
+
+    ...    
+}
+#A previous checks on investment validity 
+#B generic check against full investment received so far. 
+#C the default implementation does not perform any check at all
+
+---------------
+7.1.2	Generalizing funding limit strategy with an abstract contract
+
+
+contract FundingLimitStrategy{
+    function isFullInvestmentWithinLimit(uint256 _investment, uint256 _fullInvestmentReceived)     
+        public view returns (bool);//#A
+}
+#A This is the function performing the check on the funding cap, although it is not yet implemented at this stage
+
+--
+contract CappedFundingStrategy is FundingLimitStrategy {
+    uint256 fundingCap;//#A
+
+    constructor(uint256 _fundingCap) public {
+        require(_fundingCap > 0);
+        fundingCap = _fundingCap;
+    }
+
+    function isFullInvestmentWithinLimit(uint256 _investment, uint256 _fullInvestmentReceived) //#B
+        public view returns (bool) {
+        
+        bool check = _fullInvestmentReceived + _investment < fundingCap; 
+        return check;
+    }
+}
+#A funding cap limit
+#B this is the same implementation as seen earlier i CappedTranchePricingCrowdsale 
+
+---
+contract UnlimitedFundingStrategy is FundingLimitStrategy {
+    function isFullInvestmentWithinLimit(uint256 _investment, uint256 _fullInvestmentReceived) 
+        public view returns (bool) {
+        return true; //#A
+    }
+}
+#A no check is performed because the funding is unlimited
+
+-----
+contract SimpleCrowdsale {
+    function calculateNumberOfTokens(uint256 investment) 
+       public returns (uint256) ;//#A
+}
+//#A This function has become abstract and it has also made SimpleCrowdsale abstract
+
+----
+pragma solidity ^0.4.24;
+
+import "./Listing5_5_SimpleCrowdsale.sol";
+contract FixedPricingCrowdsale is SimpleCrowdsale {     
+
+    constructor(uint256 _startTime, uint256 _endTime, 
+    	uint256 _weiTokenPrice, uint256 _etherInvestmentObjective, 
+    	uint256 _fundingCap)
+    	SimpleCrowdsale(_startTime, _endTime, 
+    	_weiTokenPrice, _etherInvestmentObjective)
+    	payable public  {
+    }
+
+    function calculateNumberOfTokens(uint256 investment) 
+        internal returns (uint256) {
+        return investment / weiTokenPrice; //#A
+    }    
+}
+//#A this formula was in SimpleCrowdsale and now it has been moved here
+
+--------------------------
+pragma solidity ^0.4.24;
+
+import "./Listing5_3_ReleasableSimpleCoin.sol";
+import "./Listing5_4_Ownable.sol";
+import "./ch06_fundingLimitStrategy.sol";
+
+contract SimpleCrowdsale is Ownable {
+    //...
+    
+    FundingLimitStrategy internal fundingLimitStrategy;//#A
+	
+	function SimpleCrowdsale(...) 
+    {
+        ...
+        fundingLimitStrategy = createFundingLimitStrategy();
+    } 
+    
+    //...
+	
+	function createFundingLimitStrategy() 
+        internal returns (FundingLimitStrategy);
+    
+    function isValidInvestment(uint256 _investment) 
+        internal view returns (bool) {
+        bool nonZeroInvestment = _investment != 0;
+        bool withinCrowdsalePeriod = now >= startTime && now <= endTime; 
+    		
+        return nonZeroInvestment && withinCrowdsalePeriod
+           && fundingLimitStrategy.isFullInvestmentWithinLimit(_investment, investmentReceived);//#B
+    }
+    
+    //...
+}
+#A State variable holding the funding limit strategy
+#B A specific funding limit strategy is instantiated through createFundingLimitStrategy(), which is declared here as abstract
+#C This new function instantiates a specific FundingLimitStrategy; it is abstract and it must be implemented in inherited contracts
+#D The check against the funding limit is performed through the appropriate FundingLimitStrategy contract
+--------------------------------------------------------------------------------------------------------------
+7.2.1	Setting functional requirements with interfaces
+
+contract SimpleCrowdsale is Ownable {
+    ... 
+
+    ReleasableSimpleCoin public crowdsaleToken; 
+    
+    ...
+    
+    constructor(uint256 _startTime, uint256 _endTime, 
+    	uint256 _weiTokenPrice, uint256 _etherInvestmentObjective) 
+    	payable public
+    {
+        ...
+        crowdsaleToken = new ReleasableSimpleCoin(0);
+    } 
+    
+	...
+    
+    function assignTokens(address _beneficiary, 
+        uint256 _investment) internal {
+    
+        uint256 _numberOfTokens = calculateNumberOfTokens(_investment); 
+    	
+        crowdsaleToken.mint(_beneficiary, _numberOfTokens);
+    }
+    
+    ...
+    
+    function finalize() onlyOwner public {
+        ...
+            
+        if (isCrowdsaleComplete)
+        {     
+            if (investmentObjectiveMet)
+                crowdsaleToken.release();
+            else 
+                isRefundingAllowed = true;
+    
+            isFinalized = true;
+        }               
+    }
+    
+    ...  
+}
+#A crowdsaleToken is defined as state variable
+#B crowdsaleToken is initialized in the SimpleCowdsale constructor
+#C tokens bought from the investor are minted into their account
+#D the token contract is released (unlocked) so investors can transfer their tokens
+
+----
+interface ReleasableToken {
+    function mint(address _beneficiary, uint256 _numberOfTokens) public;
+    function release() public;
+    function transfer(address _to, uint256 _amount) public;
+}
+
+------------
+7.2.2	Referencing a contract through an interface
+
+//--
+
+contract ReleasableSimpleCoin is ReleasableToken {
+    //...
+}
+//#A ReleasableSimpleCoin already implements ReleasableToken as it stands
+
+contract ReleasableComplexCoin is ReleasableToken {
+    //...
+}
+
+------------------
+
+contract SimpleCrowdsale is Ownable {
+    ...
+    ReleasableToken  public crowdsaleToken; //#A    
+    ...
+    
+    constructor(uint256 _startTime, uint256 _endTime, 
+    	uint256 _weiTokenPrice, uint256 _etherInvestmentObjective) 
+    	payable public
+    {
+        ...    
+        crowdsaleToken = createToken();//#B
+        ...
+    } 
+    
+    ...
+    
+    function createToken() 
+        internal returns (ReleasableToken) {
+            return new ReleasableSimpleCoin(0); //#C
+        }
+        
+    ...   
+}
+#A now the crowdsale contract can be any token implementing ReleasableToken
+#B the token contract is instantiated in a function that can be overriden 
+#C the default implementation offered by the SimpleCrowdsale abstract contract still instantiates ReleasableSimpleCoin
+
+-----
+
+contract ReleasableComplexCoin is ReleasableToken {
+    
+}
+
+----
+
+contract UnlimitedFixedPricingCrowdsaleWithComplexCoin 
+    is UnlimitedFixedPricingCrowdsale {
+    
+    constructor(uint256 _startTime, 
+	    uint256 _endTime, 
+    	uint256 _weiTokenPrice, uint256 _etherInvestmentObjective)
+    	UnlimitedFixedPricingCrowdsale(_startTime, _endTime, 
+    	_weiTokenPrice, _etherInvestmentObjective)
+    	payable public  {
+    }
+    
+    function createToken() 
+        internal returns (ReleasableToken) {
+            return new ReleasableComplexCoin();//#A
+        }
+}
+#A you just need to override this function which instantiates a different token contract
+
+------------------------------------------------
+// 7.3 Recap
+//7.3.1 Inheritance
+
+
+contract Parent1 {
+
+    int256 public stateVar1;
+    bool public stateVar2;	
+
+    function initialize() public {}
+    function Parent1(int256 param1, bool param2) public {}
+
+    function operation1(int256 opParam1) public returns (int256) {}
+
+}
+
+contract ParentA {
+
+    int256 public stateVarA;
+    int16 public stateVarB;	
+
+    function initialize() public {}
+    function ParentA(int256 paramA, int16 paramB) public {}
+
+    function operationA(bool opParamA) public {}
+}
+
+contract Child is Parent1, ParentA { //#A
+
+}
+#A Child inherits the state variables stateVar1, stateVar2, stateVarA, stateVarB and the functions operation1() and operationA() from its parent contracts Parent1 and ParentA
+
+---
+//constructor
+function Child(int256 p1, bool p2, int256 pA, int16 pB) 
+    Parent1(p1, p2) ParentA(pA, pB) {
+} 
+
+---
+//overriding
+
+contract Child is Parent1, ParentA { 
+   
+    function operationA(bool opParamA) public {//#A
+        ParentA.operationA(opParamA);
+    }
+}
+//#A New implementation which replaces ParentA.operationA()
+
+---
+
+contract Child is Parent1, ParentA {
+   
+    function operationA(bool opParamA) public {
+        ParentA.operationA(opParamA);//#A
+    }
+}
+//#A New implementation which replaces ParentA.operationA()
+
+---
+contract Child is Parent1, ParentA { 
+    ... 
+    
+    function initialize() public {
+        ...
+        super.initialize();//#A
+    }
+    
+    ...
+}
+
+
+----------------
+//abstract classes
+contract AbstractContract {
+    int256 public stateVar;
+       
+    constructor(int256 param1)  public {
+        stateVar = param1;
+    }
+
+    function operation1(int256 opParam1, bool opParam2)
+        returns (int256) {
+        if (opParam2) return opParam1;
+    }
+
+    function operationA(int256 opParamA);//#A
+}
+//#A this is an abstract function, which makes AbstractContract abstract
+
+---------------------
+//interfaces
+
+//interfaces
+
+interface SampleInterface {
+    function operation1(int256 param1, bool param2);
+    function operationA(int16 paramA);
+}
+
+contract SampleContract is SampleInterface {
+    function operation1(int256 param1, bool param2) {
+        //#A
+    }
+
+    function operationA(int16 paramA) {
+       //#B
+    }
+}
+//#A implementation of operation1
+//#B implementation of operationA
+
+--------------------------
+
+// Libraries
+
